@@ -67,24 +67,43 @@ impl GlutinWindowContext {
                 .as_raw()
         });
         log::debug!("raw window handle: {raw_window_handle:?}");
-        let context_attributes =
-            glutin::context::ContextAttributesBuilder::new().build(raw_window_handle);
-        // by default, glutin will try to create a core opengl context. but, if it is not available, try to create a gl-es context using this fallback attributes
+        let context_attributes = glutin::context::ContextAttributesBuilder::new()
+            .with_profile(glutin::context::GlProfile::Core)
+            .build(raw_window_handle);
+        let legacy_context_attributes = glutin::context::ContextAttributesBuilder::new()
+            .with_profile(glutin::context::GlProfile::Compatibility)
+            .with_context_api(glutin::context::ContextApi::OpenGl(Some(
+                glutin::context::Version::new(2, 1),
+            )))
+            .build(raw_window_handle);
+        // by default, glutin will try to create a desktop opengl context.
+        // if that fails, try a GL 2.1 compatibility context, then fall back to GLES.
         let fallback_context_attributes = glutin::context::ContextAttributesBuilder::new()
             .with_context_api(glutin::context::ContextApi::Gles(None))
             .build(raw_window_handle);
         let not_current_gl_context = unsafe {
             gl_display
-                    .create_context(&gl_config, &context_attributes)
-                    .unwrap_or_else(|_| {
-                        log::debug!("failed to create gl_context with attributes: {:?}. retrying with fallback context attributes: {:?}",
-                            &context_attributes,
-                            &fallback_context_attributes);
-                        gl_config
-                            .display()
-                            .create_context(&gl_config, &fallback_context_attributes)
-                            .expect("failed to create context even with fallback attributes")
-                    })
+                .create_context(&gl_config, &context_attributes)
+                .or_else(|_| {
+                    log::debug!(
+                        "failed to create core gl_context with attributes: {:?}. retrying with legacy context attributes: {:?}",
+                        &context_attributes,
+                        &legacy_context_attributes
+                    );
+                    gl_config
+                        .display()
+                        .create_context(&gl_config, &legacy_context_attributes)
+                })
+                .unwrap_or_else(|_| {
+                    log::debug!(
+                        "failed to create desktop gl_context. retrying with GLES context attributes: {:?}",
+                        &fallback_context_attributes
+                    );
+                    gl_config
+                        .display()
+                        .create_context(&gl_config, &fallback_context_attributes)
+                        .expect("failed to create context even with GLES fallback attributes")
+                })
         };
 
         // this is where the window is created, if it has not been created while searching for suitable gl_config

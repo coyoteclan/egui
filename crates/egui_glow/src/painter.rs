@@ -88,6 +88,7 @@ pub struct Painter {
     u_screen_size: glow::UniformLocation,
     u_sampler: glow::UniformLocation,
     is_webgl_1: bool,
+    prefers_unsized_texture_formats: bool,
     vao: crate::vao::VertexArrayObject,
     srgb_textures: bool,
     supports_srgb_framebuffer: bool,
@@ -173,6 +174,9 @@ impl Painter {
         let supported_extensions = gl.supported_extensions();
         log::trace!("OpenGL extensions: {supported_extensions:?}");
         let srgb_textures = false; // egui wants normal sRGB-unaware textures
+                                   // Legacy desktop GL drivers are often happier with unsized internal formats.
+        let prefers_unsized_texture_formats =
+            cfg!(target_arch = "wasm32") || gl.version().major < 3;
 
         let supports_srgb_framebuffer = !cfg!(target_arch = "wasm32")
             && supported_extensions.iter().any(|extension| {
@@ -180,6 +184,7 @@ impl Painter {
                 extension.ends_with("ARB_framebuffer_sRGB")
             });
         log::debug!("SRGB framebuffer Support: {supports_srgb_framebuffer}");
+        log::debug!("Prefer unsized texture formats: {prefers_unsized_texture_formats}");
 
         unsafe {
             let vert = compile_shader(
@@ -259,6 +264,7 @@ impl Painter {
                 u_screen_size,
                 u_sampler,
                 is_webgl_1,
+                prefers_unsized_texture_formats,
                 vao,
                 srgb_textures,
                 supports_srgb_framebuffer,
@@ -577,18 +583,19 @@ impl Painter {
             );
             check_for_gl_error!(&self.gl, "tex_parameter");
 
-            let (internal_format, src_format) = if self.is_webgl_1 {
-                let format = if self.srgb_textures {
-                    glow::SRGB_ALPHA
+            let (internal_format, src_format) =
+                if self.is_webgl_1 || self.prefers_unsized_texture_formats {
+                    let format = if self.srgb_textures {
+                        glow::SRGB_ALPHA
+                    } else {
+                        glow::RGBA
+                    };
+                    (format, format)
+                } else if self.srgb_textures {
+                    (glow::SRGB8_ALPHA8, glow::RGBA)
                 } else {
-                    glow::RGBA
+                    (glow::RGBA8, glow::RGBA)
                 };
-                (format, format)
-            } else if self.srgb_textures {
-                (glow::SRGB8_ALPHA8, glow::RGBA)
-            } else {
-                (glow::RGBA8, glow::RGBA)
-            };
 
             self.gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
 
